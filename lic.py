@@ -3,7 +3,6 @@
 # TODO: Server IP and Port is hardcoded to localhost. Need to make them dynamic based on parameter input (and perhaps even make it auto-find servers using UDP broadcast?)
 # TODO: Handle Rate argument input (i.e. do we want to specify '1000' or '1kpbs', '1000000000' or '1gbps', etc.)
 # TODO: Sleep Timer and Packet Size need to be amended (MacOS sends 1 packet per byte! ouch)
-# TODO: Result table needs to be pretty printed a little better with zero padding
 
 import argparse
 import json
@@ -12,6 +11,7 @@ import socket
 import sys
 import time
 import traceback
+from tabulate import tabulate
 
 def main():
 
@@ -175,11 +175,11 @@ def main():
     print(results)
     print("Testing Complete")
     print("Results:")
-    print("--------------------------------------------------")
-    print("Round    Rate       Lost      Rating")
-    for result in results:
-        print(f"{result['round']:02d}       {result['rate']}      {result['lost']}%     {result['rating']}")
-    print("--------------------------------------------------")
+
+    # Print the results of the test
+    header = {'round': "Round", 'rate':"Rate (mbps)", 'lost':"Lost (%)", 'rating':"Rating"}
+    print(tabulate(results, headers=header, tablefmt="grid"))
+
 
 if __name__ == "__main__":
     main()
