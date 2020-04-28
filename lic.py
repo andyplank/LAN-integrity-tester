@@ -21,12 +21,24 @@ def main():
     parser.add_argument('rate', type=int, help='The maximum rate of data transfer to be incrementally tested up to (max 1gbps)')
     parser.add_argument('-a', dest='address', type=str, nargs='?', help='The IP address of the desired server')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
+    parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
     args = parser.parse_args()
     
     # Check argument validity
     if args.rounds < 1 or args.rounds > 25:
         print("Error: Argument 'rounds' must be in the range 0 < x <= 25")
         exit(1)
+
+    # Check artificial loss argument
+    loss = 0
+    if args.loss:
+        if args.loss > 1:
+            print("Error: Argument 'loss' must be in the range 0 <= x <= 1")
+            exit(1)
+        if args.loss < 0:
+            print("Error: Argument 'loss' must be in the range 0 <= x <= 1")
+            exit(1)
+        loss = args.loss
 
     # Determine round and datarate information
     max_rounds = args.rounds if args.rounds else 10
@@ -98,7 +110,8 @@ def main():
             'status': 'test_in_progress',
             'round': current_round,
             'rate': current_rate,
-            'byte_count': byte_count
+            'byte_count': byte_count,
+            'loss': loss
         }
 
         tcp_socket.send(json.dumps(config).encode('utf-8') + b'\n')
