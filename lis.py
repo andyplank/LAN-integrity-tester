@@ -10,12 +10,19 @@ import random
 
 def main():
 
+    # Default port to listen for broadcasts
+    broad_port = 4322
+
+    brp_help = f'The port number that the server will listen for broadcasts on. Default is {broad_port}'
+
     # Parse required arguments
     parser = argparse.ArgumentParser(description='LAN Integrity Tester Client')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The desired TCP port for the server to bind to')
+    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
+    parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
-    # Check argument validity
+    # Check port argument validity
     if args.port:
         if args.port < 0 or args.port > 65535:
             print("Error: Argument 'port' must be in the range 0 < x <= 65535")
@@ -24,6 +31,17 @@ def main():
             print("Warning: Argument 'port' is a well-defined port. This may require superuser permissions")
         elif args.port < 49151:
             print("Warning: Argument 'port' is a registered port. Port collision is possible")
+
+    # Check broadcast port validity
+    if args.broad_port:
+        if args.broad_port < 0 or args.broad_port > 65535:
+            print("Error: Argument 'broad_port' must be in the range 0 < x <= 65535")
+            exit(1)
+        if args.broad_port < 1024:
+            print("Warning: Argument 'broad_port' is a well-defined port. This may require superuser permissions")
+        elif args.broad_port < 49151:
+            print("Warning: Argument 'broad_port' is a registered port. Port collision is possible")
+        broad_port = args.broad_port
 
     # Extract parsed arguments
     if (args.port):
@@ -34,8 +52,13 @@ def main():
     # Establish server at specified port number and await a connection
     print(f"Establishing listening server on port {tcp_port}...")
     tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    tcp_socket.bind(('localhost', tcp_port))
+    tcp_socket.bind(('', tcp_port))
     tcp_socket.listen(1)
+
+    # Broadcasting mode enabled. Dispatch a thread to listen for requests
+    if args.br or args.broad_port:
+        broadcast_listener = threading.Thread(target=UDP_Broadcast, args=(tcp_port, broad_port,))
+        broadcast_listener.start()
 
     # Serve indefinitely
     while True:
@@ -44,6 +67,21 @@ def main():
         # Service new connection
         print(f"Connection established by address {tcp_addr}")
         TCP_Connection_Handler(tcp_conn)
+
+
+def UDP_Broadcast(tcp_port, broad_port):
+    # Response to be sent to the client if a broadcast is received
+    resBody = {
+        'port': tcp_port,
+    }
+    res = json.dumps(resBody).encode('utf-8')
+    listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    listener.bind(('', broad_port))
+    print(f"Listening for broadcasts on {broad_port}")
+    while(True):
+        udp_msg, udp_addr = listener.recvfrom(1024)
+        print(f"Broadcast message received by {udp_addr}. Replying...")
+        listener.sendto(res, udp_addr)
 
 # Handles TCP connections for handling active tests.
 # Is NOT intended to be threaded
@@ -65,7 +103,7 @@ def TCP_Connection_Handler(tcp_conn):
 
     # Bind UDP socket to a OS-specified port number
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp_socket.bind(('localhost', 0))
+    udp_socket.bind(('', 0))
 
     # Send OS-allocated UDP port number to client as JSON
     response = {

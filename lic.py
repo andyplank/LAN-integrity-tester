@@ -1,6 +1,5 @@
 #!/usr/bin/python
 
-# TODO: Make client auto-find servers using UDP broadcast
 # TODO: Handle Rate argument input (i.e. do we want to specify '1000' or '1kpbs', '1000000000' or '1gbps', etc.)
 # TODO: Sleep Timer and Packet Size need to be amended (MacOS sends 1 packet per byte! ouch)
 
@@ -15,6 +14,11 @@ from tabulate import tabulate
 
 def main():
 
+    # Default port to broadcast to
+    broad_port = 4322
+
+    brp_help = f'The port number that the server will listen for broadcasts on. Default is {broad_port}'
+
     # Parse required arguments
     parser = argparse.ArgumentParser(description='LAN Integrity Tester Client')
     parser.add_argument('rounds', type=int, help='The number of tranmission rounds to be performed (number of divisions of the transmission rate) (max 25)')
@@ -22,12 +26,25 @@ def main():
     parser.add_argument('-a', dest='address', type=str, nargs='?', help='The IP address of the desired server')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
     parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
+    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
+    parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
     # Check argument validity
     if args.rounds < 1 or args.rounds > 25:
         print("Error: Argument 'rounds' must be in the range 0 < x <= 25")
         exit(1)
+
+    # Check broadcast port validity
+    if args.broad_port:
+        if args.broad_port < 0 or args.broad_port > 65535:
+            print("Error: Argument 'broad_port' must be in the range 0 < x <= 65535")
+            exit(1)
+        if args.broad_port < 1024:
+            print("Warning: Argument 'broad_port' is a well-defined port. This may require superuser permissions")
+        elif args.broad_port < 49151:
+            print("Warning: Argument 'broad_port' is a registered port. Port collision is possible")
+        broad_port = args.broad_port
 
     # Check artificial loss argument
     loss = 0
@@ -42,12 +59,47 @@ def main():
 
     # Determine round and datarate information
     max_rounds = args.rounds if args.rounds else 10
+    print(max_rounds)
     max_rate = args.rate if args.rate else 1000000000
+    print(max_rate)
     increment = max_rate / max_rounds
 
     # Extract optional address and port argument
     address = args.address if args.address else 'localhost'
     port = args.port if args.port else 62994
+    
+    # Running in broadcast mode so we have to locate the server
+    if args.br:
+        print('Broadcast mode enabled. Attempting to locate the server...')
+        broadcast = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        broadcast.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        broadcast.settimeout(1)
+        reply = False
+        # Broadcast the message 10 times and wait 1 s for a reply each time
+        for i in range(10):
+            broadcast.sendto(b'Hello', ('<broadcast>', 4322))
+            try:
+                udp_msg, udp_addr = broadcast.recvfrom(1024)
+                response = json.loads(udp_msg.decode('utf-8'))
+                address = udp_addr[0]
+                try:
+                    port = response['port']
+                except KeyError:
+                    print("Error: invalid response from server. Try a different broadcast port")
+                    continue
+                print(f'Server located at {address}:{port}')
+                reply = True
+                broadcast.close()
+                break
+            except socket.timeout:
+                continue
+        # If no reply was received from the server then terminate
+        if not reply:
+            print("Broadcast failed. No response was received from the server")
+            exit(1)        
+
+    print(address)
+    print(port)
 
     # Establish a connection to the remote server
     print("Establishing a connection to the test server...")
