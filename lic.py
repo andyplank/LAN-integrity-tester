@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-# TODO: Server IP and Port is hardcoded to localhost. Need to make them dynamic based on parameter input (and perhaps even make it auto-find servers using UDP broadcast?)
+# TODO: Make client auto-find servers using UDP broadcast
 # TODO: Handle Rate argument input (i.e. do we want to specify '1000' or '1kpbs', '1000000000' or '1gbps', etc.)
 # TODO: Sleep Timer and Packet Size need to be amended (MacOS sends 1 packet per byte! ouch)
 
@@ -23,7 +23,7 @@ def main():
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
     parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
     args = parser.parse_args()
-    
+
     # Check argument validity
     if args.rounds < 1 or args.rounds > 25:
         print("Error: Argument 'rounds' must be in the range 0 < x <= 25")
@@ -45,11 +45,15 @@ def main():
     max_rate = args.rate if args.rate else 1000000000
     increment = max_rate / max_rounds
 
+    # Extract optional address and port argument
+    address = args.address if args.address else 'localhost'
+    port = args.port if args.port else 62994
+
     # Establish a connection to the remote server
     print("Establishing a connection to the test server...")
     try:
         tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        tcp_socket.connect(('localhost', 62994))
+        tcp_socket.connect((address, port))
     except:
         print("Failed to establish a connection to the server. Aborting...")
         traceback.print_exc()
@@ -76,7 +80,7 @@ def main():
         # Extract server's UDP port number from server response
         response = json.loads(data.decode('utf-8'))
 
-        if 'status' not in response or response['status'] != 'synchronize-ack': 
+        if 'status' not in response or response['status'] != 'synchronize-ack':
             raise Exception('Server did not syn-ack')
             return
 
@@ -124,7 +128,7 @@ def main():
                 break
             data += byte
             byte = tcp_socket.recv(1)
-    
+
         if (json.loads(data.decode('utf-8'))['status'] != 'ready'):
             print("PANIC")
             exit(1)
@@ -134,7 +138,7 @@ def main():
         payload[0] = 0
         for x in range(byte_count):
             # print("payload:" + str(payload))
-            udp_socket.sendto(payload, ('localhost', udp_port))
+            udp_socket.sendto(payload, (address, udp_port))
             payload[0] = (payload[0] + 1) % 255
             # time.sleep(sleep_time)
 
