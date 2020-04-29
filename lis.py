@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import argparse
 import json
@@ -17,20 +17,23 @@ def main():
 
     # Parse required arguments
     parser = argparse.ArgumentParser(description='LAN Integrity Tester Client')
-    parser.add_argument('-p', dest='port', type=int, nargs='?', help='The desired TCP port for the server to bind to')
+    parser.add_argument('-p', dest='tcp_port', type=int, nargs='?', help='The desired TCP port for the server to bind to')
     parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
     parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
-    # Check port argument validity
-    if args.port:
-        if args.port < 0 or args.port > 65535:
+    # Check TCP port argument validity
+    if args.tcp_port:
+        if args.tcp_port < 0 or args.tcp_port > 65535:
             print("Error: Argument 'port' must be in the range 0 < x <= 65535")
             exit(1)
-        if args.port < 1024:
+        if args.tcp_port < 1024:
             print("Warning: Argument 'port' is a well-defined port. This may require superuser permissions")
-        elif args.port < 49151:
+        elif args.tcp_port < 49151:
             print("Warning: Argument 'port' is a registered port. Port collision is possible")
+        tcp_port = args.tcp_port
+    else:
+        tcp_port = 62994
 
     # Check broadcast port validity
     if args.broad_port:
@@ -42,12 +45,6 @@ def main():
         elif args.broad_port < 49151:
             print("Warning: Argument 'broad_port' is a registered port. Port collision is possible")
         broad_port = args.broad_port
-
-    # Extract parsed arguments
-    if (args.port):
-        tcp_port = args.port
-    else:
-        tcp_port = 62994
 
     # Establish server at specified port number and await a connection
     print(f"Establishing listening server on port {tcp_port}...")
@@ -101,7 +98,7 @@ def TCP_Connection_Handler(tcp_conn):
         print("Connection did not properly synchronize")
         return
 
-    # Bind UDP socket to a OS-specified port number
+    # Bind UDP socket to an OS-specified port number
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.bind(('', 0))
 
@@ -130,7 +127,7 @@ def TCP_Connection_Handler(tcp_conn):
 
         # If testing is complete, compute results, return to sender, and terminate connection
         if (round_config['status'] == 'test_complete'):
-            print("Test complete... Returning")
+            print("Testing complete. Closing Connection...")
             tcp_conn.send(json.dumps(results).encode('utf-8') + b'\n')
             tcp_conn.close()
             return
@@ -143,10 +140,11 @@ def TCP_Connection_Handler(tcp_conn):
             return
         loss = round_config['loss']
 
-        # Testing has proceeded to the next round. Spawn handler and signal ready
+        # Testing has proceeded to the next round. Create arguments, spawn handler, and signal ready
+        statistics = []
         stop_signal = False
         payload_map = dict()
-        listener_thread = threading.Thread(target=UDP_Listener, args=(udp_socket, payload_map, loss, lambda: stop_signal,))
+        listener_thread = threading.Thread(target=UDP_Listener, args=(udp_socket, round_config['expected_payload'], statistics, loss, lambda: stop_signal,))
         listener_thread.start()
 
         tcp_conn.send(json.dumps({'status': 'ready'}).encode('utf-8') + b'\n')
@@ -165,15 +163,18 @@ def TCP_Connection_Handler(tcp_conn):
         listener_thread.join()
 
         # Compute round results
-        bytes_received = 0
-        # for x in range(255):
-        # bytes_received = bytes_received + payload_map[x]
-        for key in payload_map:
-            bytes_received = bytes_received + payload_map[key]
+        packets_received, packets_mangled = statistics
+        if (round_config['byte_count'] > 0):
+            lost_percent = (round_config['byte_count'] - packets_received) / round_config['byte_count'] * 100
+        else:
+            lost_percent = 0
 
-        lost_percent = (round_config['byte_count'] - bytes_received) / round_config['byte_count'] * 100
+        if(packets_received > 0):
+            mangled_percent = 100 - ((packets_received - packets_mangled) / packets_received * 100)
+        else:
+            mangled_percent = 0
+
         rating = 'pass'
-
         if lost_percent > 1:
             rating = 'acceptable'
         if lost_percent > 7:
@@ -183,30 +184,41 @@ def TCP_Connection_Handler(tcp_conn):
             'round': round_config['round'],
             'rate': round_config['rate'],
             'lost': lost_percent,
+            'mangled': mangled_percent,
             'rating': rating
         })
 
-        print(results)
         # Signal client that server is ready for the next round
         tcp_conn.send(json.dumps({'status': 'ready'}).encode('utf-8') + b'\n')
 
 # Handles UDP listening on a separate thread so that the TCP connection can be monitored by main thread for status updates
 # Param: udp_socket: The udp socket to be monitored
-# Param: payload_map: The key-value dictionary, used such that payload_map[payload]++ to count payload instances
+# Param: expected_byte: An integer representation of the expected byte value repeated in the payload
+# Param: statistics: A list object consisting of the tuple [packets_received, packets_mangled]
 # Param: loss: A float value that specifies the amount of articial loss to be inserted into the analysis
-# Param: signal: A boolean that signifies whether the thread should terminate after a period of no new packets
-def UDP_Listener(udp_socket, payload_map, loss, signal):
+# Param: signal: A boolean that signifies whether the thread should terminate after a period of no new packets (should be passed as a lambda to avoid pass-by-value)
+def UDP_Listener(udp_socket, expected_byte, statistics, loss, signal):
+
+    packets_received = 0
+    packets_mangled = 0
+
     while True:
         udp_socket.settimeout(1)
         try:
-            udp_msg, udp_addr = udp_socket.recvfrom(1)
+            udp_msg = udp_socket.recv(9216)
+            # If packet falls within artificial loss window, drop (ignore) it
             if(random.random() > loss):
-                if int.from_bytes(udp_msg, 'little') in payload_map:
-                    payload_map[int.from_bytes(udp_msg, 'little')] = payload_map[int.from_bytes(udp_msg, 'little')] + 1
+                # If payload matches expected payload, just increment packet counter
+                if(udp_msg[0] == expected_byte):
+                    packets_received = packets_received + 1
+                # Else, payload was mangled. Increment packet counter and magled packet counter
                 else:
-                    payload_map[int.from_bytes(udp_msg, 'little')] = 1
+                    packets_received = packets_received + 1
+                    packets_mangled = packets_mangled + 1
         except socket.timeout:
             if signal():
+                statistics.append(packets_received)
+                statistics.append(packets_mangled)
                 return
 
 if __name__ == "__main__":
