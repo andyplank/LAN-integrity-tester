@@ -26,13 +26,21 @@ def main():
     parser.add_argument('-a', dest='address', type=str, nargs='?', help='The IP address of the desired server')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
     parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
-    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
+    parser.add_argument('-uni', dest='unit', type=str, nargs='?', help='The desired unit for rate')
+    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')    
     parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
     # Check argument validity
     if args.rounds < 1 or args.rounds > 25:
         print("Error: Argument 'rounds' must be in the range 0 < x <= 25")
+        exit(1)
+
+    # Check argument validity
+    if (args.unit != 'kbps'
+        and args.unit != 'mbps'
+        and args.unit != 'gbps'):
+        print("Error: Argument 'unit' must be either kbps, mbps, or gbps")
         exit(1)
 
     # Check broadcast port validity
@@ -59,9 +67,25 @@ def main():
 
     # Determine round and datarate information
     max_rounds = args.rounds if args.rounds else 10
-    print(max_rounds)
     max_rate = args.rate if args.rate else 1000000000
-    print(max_rate)
+
+    # Calculate the new data transfer rate
+    if args.unit:
+        multipler = 1
+        if args.unit == 'kbps':
+            multiplier = 1000
+        if args.unit == 'mbps':
+            multiplier = 1000000
+        if args.unit == 'gbps':
+            multiplier = 1000000000
+        max_rate = max_rate * multiplier
+
+    # Check the max rate is not over 1 gbps
+    if max_rate > 1000000000:
+        print("Error: Data transfer rate is over 1 gbps.")
+        exit(1)
+
+    # Calculate the increment between each round
     increment = max_rate / max_rounds
 
     # Extract optional address and port argument
@@ -233,7 +257,7 @@ def main():
     print("Results:")
 
     # Print the results of the test
-    header = {'round': "Round", 'rate':"Rate (mbps)", 'lost':"Lost (%)", 'rating':"Rating"}
+    header = {'round': "Round", 'rate':"Rate (bytes)", 'lost':"Lost (%)", 'rating':"Rating"}
     print(tabulate(results, headers=header, tablefmt="grid"))
 
 
