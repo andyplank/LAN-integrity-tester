@@ -1,6 +1,5 @@
 #!/usr/bin/python3
 
-# TODO: Handle Rate argument input (i.e. do we want to specify '1000' or '1kpbs', '1000000000' or '1gbps', etc.)
 # TODO: Sleep Timer and Packet Size need to be amended (MacOS sends 1 packet per byte! ouch)
 
 import argparse
@@ -25,7 +24,8 @@ def main():
     parser.add_argument('-a', dest='address', type=str, nargs='?', help='The IP address of the desired server')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
     parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
-    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
+    parser.add_argument('-uni', dest='unit', type=str, nargs='?', help='The desired unit for rate in kbps, mbps, or gbps. Default is bytes')
+    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')    
     parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
@@ -38,6 +38,13 @@ def main():
             rounds = args.rounds
     else:
         rounds = 10
+
+    # Check argument validity
+    if (args.unit != 'kbps'
+        and args.unit != 'mbps'
+        and args.unit != 'gbps'):
+        print("Error: Argument 'unit' must be either kbps, mbps, or gbps")
+        exit(1)
 
     # Check broadcast port validity
     if args.broad_port:
@@ -62,7 +69,26 @@ def main():
         loss = args.loss
 
     # Determine round and datarate information
-    max_rate = args.rate if args.rate else 1000000000
+    max_rate = args.rate if args.rate else 1000000
+    increment = max_rate / rounds
+
+    # Calculate the new data transfer rate
+    if args.unit:
+        multipler = 1
+        if args.unit == 'kbps':
+            multiplier = 1000
+        if args.unit == 'mbps':
+            multiplier = 1000000
+        if args.unit == 'gbps':
+            multiplier = 1000000000
+        max_rate = max_rate * multiplier
+
+    # Check the max rate is not over 1 gbps
+    if max_rate > 1000000000:
+        print("Error: Data transfer rate is over 1 gbps.")
+        exit(1)
+
+    # Calculate the increment between each round
     increment = max_rate / rounds
 
     # Extract optional address and port argument
@@ -159,17 +185,21 @@ def main():
         # Compute random payload value
         payload_byte = random.randint(0, 255)
         
-        # Compute round rate, total byte 
+        # Compute round rate, total bytes
         current_rate = current_round * increment
-        byte_count = int(current_rate * 5 / 8)
-        sleep_time = 5 / byte_count / 8
+        packet_count = int(current_rate / 8 / 9216) 
+        sleep_time = 5 / packet_count
+
+        print(f"Current_rate is {current_rate}")
+        print(f"packet_count is {packet_count}")
+        print(f"sleep_time is {sleep_time}") 
 
         # Send server current round configuration JSON
         config = {
             'status': 'test_in_progress',
             'round': current_round,
             'rate': current_rate,
-            'byte_count': byte_count,
+            'packet_count': packet_count,
             'expected_payload': payload_byte,
             'loss': loss
         }
@@ -189,11 +219,11 @@ def main():
             print("PANIC")
             exit(1)
 
-        # Send UDP 512 bytes at a time, with payload containing duplicate bytes counting up from 0
-        for x in range(byte_count):
+        # Send UDP 9216 bytes at a time, with payload containing a random duplicated byte
+        for x in range(packet_count):
             payload = bytearray([payload_byte] * 9216)
             udp_socket.sendto(payload, (address, udp_port))
-            # time.sleep(sleep_time)
+            time.sleep(sleep_time)
 
         # Signal server that round is complete
         tcp_socket.send(json.dumps({ 'status': 'round_complete'}).encode('utf-8') + b'\n')
@@ -233,7 +263,7 @@ def main():
     print("Results:")
 
     # Print the results of the test
-    header = {'round': "Round", 'rate':"Rate (mbps)", 'lost':"Lost (%)", 'mangled':"Mangled (%)", 'rating':"Rating"}
+    header = {'round': "Round", 'rate':"Rate (bytes)", 'lost':"Lost (%)", 'mangled':"Mangled (%)", 'rating':"Rating"}
     print(tabulate(results, headers=header, tablefmt="grid"))
 
 

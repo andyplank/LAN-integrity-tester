@@ -163,9 +163,10 @@ def TCP_Connection_Handler(tcp_conn):
         listener_thread.join()
 
         # Compute round results
+        print(round_config)
         packets_received, packets_mangled = statistics
-        if (round_config['byte_count'] > 0):
-            lost_percent = (round_config['byte_count'] - packets_received) / round_config['byte_count'] * 100
+        if (round_config['packet_count'] > 0):
+            lost_percent = (round_config['packet_count'] - packets_received) / round_config['packet_count'] * 100
         else:
             lost_percent = 0
 
