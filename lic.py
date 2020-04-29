@@ -1,6 +1,5 @@
 #!/usr/bin/python
 
-# TODO: Handle Rate argument input (i.e. do we want to specify '1000' or '1kpbs', '1000000000' or '1gbps', etc.)
 # TODO: Sleep Timer and Packet Size need to be amended (MacOS sends 1 packet per byte! ouch)
 
 import argparse
@@ -26,7 +25,7 @@ def main():
     parser.add_argument('-a', dest='address', type=str, nargs='?', help='The IP address of the desired server')
     parser.add_argument('-p', dest='port', type=int, nargs='?', help='The port number of the desired server')
     parser.add_argument('-l', dest='loss', type=float, nargs='?', help='An artificial amount of loss to be added.')
-    parser.add_argument('-uni', dest='unit', type=str, nargs='?', help='The desired unit for rate')
+    parser.add_argument('-uni', dest='unit', type=str, nargs='?', help='The desired unit for rate in kbps, mbps, or gbps. Default is bytes')
     parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')    
     parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
