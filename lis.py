@@ -12,13 +12,13 @@ def main():
 
     # Default port to listen for broadcasts
     broad_port = 4322
-
     brp_help = f'The port number that the server will listen for broadcasts on. Default is {broad_port}'
 
     # Parse required arguments
     parser = argparse.ArgumentParser(description='LAN Integrity Tester Client')
     parser.add_argument('-p', dest='tcp_port', type=int, nargs='?', help='The desired TCP port for the server to bind to')
-    parser.add_argument('-br', action='store_true', help='A flag to use UDP broadcast to find the server.')
+    parser.add_argument('-rt', action='store_true', help='A flag to enable round trip mode.')
+    parser.add_argument('-br', action='store_false', help='A flag to disable UDP broadcast to find the server.')    
     parser.add_argument('-brp', dest='broad_port', type=int, nargs='?', help=brp_help)
     args = parser.parse_args()
 
@@ -60,10 +60,9 @@ def main():
     # Serve indefinitely
     while True:
         tcp_conn, tcp_addr = tcp_socket.accept()
-
         # Service new connection
         print(f"Connection established by address {tcp_addr}")
-        TCP_Connection_Handler(tcp_conn)
+        TCP_Connection_Handler(tcp_conn, args.rt)
 
 
 def UDP_Broadcast(tcp_port, broad_port):
@@ -82,7 +81,7 @@ def UDP_Broadcast(tcp_port, broad_port):
 
 # Handles TCP connections for handling active tests.
 # Is NOT intended to be threaded
-def TCP_Connection_Handler(tcp_conn):
+def TCP_Connection_Handler(tcp_conn, echo):
     # Await and decode connection synchronize request in JSON
     data = bytearray()
     byte = tcp_conn.recv(1)
@@ -114,6 +113,7 @@ def TCP_Connection_Handler(tcp_conn):
 
     # Handle each transmission round until client terminates test
     while True:
+
         # Await and decode round configuration JSON
         data = bytearray()
         byte = tcp_conn.recv(1)
@@ -130,6 +130,7 @@ def TCP_Connection_Handler(tcp_conn):
             print("Testing complete. Closing Connection...")
             tcp_conn.send(json.dumps(results).encode('utf-8') + b'\n')
             tcp_conn.close()
+            udp_socket.close()
             return
 
         # Getting artificial loss value from config
@@ -137,17 +138,22 @@ def TCP_Connection_Handler(tcp_conn):
             print("Error: Argument 'loss' must be in the range 0 <= x <= 1")
             tcp_conn.send(json.dumps("Error: Argument 'loss' must be in the range 0 <= x <= 1").encode('utf-8') + b'\n')
             tcp_conn.close()
+            udp_socket.close()
             return
         loss = round_config['loss']
 
         # Testing has proceeded to the next round. Create arguments, spawn handler, and signal ready
         statistics = []
         stop_signal = False
-        payload_map = dict()
-        listener_thread = threading.Thread(target=UDP_Listener, args=(udp_socket, round_config['expected_payload'], statistics, loss, lambda: stop_signal,))
+        listener_thread = {}
+        if echo == True:
+            listener_thread = threading.Thread(target=UDP_Reply, args=(udp_socket, round_config['expected_payload'], statistics, loss, lambda: stop_signal,))
+        else:
+            listener_thread = threading.Thread(target=UDP_Listener, args=(udp_socket, round_config['expected_payload'], statistics, loss, lambda: stop_signal,))
         listener_thread.start()
-
         tcp_conn.send(json.dumps({'status': 'ready'}).encode('utf-8') + b'\n')
+
+        start = time.time()
 
         # Await round completion JSON from client
         data = bytearray()
@@ -158,39 +164,50 @@ def TCP_Connection_Handler(tcp_conn):
             data += byte
             byte = tcp_conn.recv(1)
 
+        finish = time.time()
+        diff = finish - start
+
         # Signal UDP listening thread to terminate and then await it
         stop_signal = True
         listener_thread.join()
 
         # Compute round results
-        print(round_config)
-        packets_received, packets_mangled = statistics
-        if (round_config['packet_count'] > 0):
-            lost_percent = (round_config['packet_count'] - packets_received) / round_config['packet_count'] * 100
-        else:
-            lost_percent = 0
-
-        if(packets_received > 0):
-            mangled_percent = 100 - ((packets_received - packets_mangled) / packets_received * 100)
-        else:
-            mangled_percent = 0
-
-        rating = 'pass'
-        if lost_percent > 1:
-            rating = 'acceptable'
-        if lost_percent > 7:
-            rating = 'fail'
-
-        results.append({
-            'round': round_config['round'],
-            'rate': round_config['rate'],
-            'lost': lost_percent,
-            'mangled': mangled_percent,
-            'rating': rating
-        })
+        results.append(compute_Results(round_config, statistics, diff))
 
         # Signal client that server is ready for the next round
         tcp_conn.send(json.dumps({'status': 'ready'}).encode('utf-8') + b'\n')
+
+
+def compute_Results(round_config, statistics, diff):
+    
+    print(round_config)
+    packets_received, packets_mangled = statistics
+    print(f'Packets mangled {packets_mangled}')
+    if (round_config['packet_count'] > 0):
+        lost_percent = (round_config['packet_count'] - packets_received) / round_config['packet_count'] * 100
+    else:
+        lost_percent = 0
+
+    if(packets_received > 0):
+        mangled_percent = 100 - ((packets_received - packets_mangled) / packets_received * 100)
+    else:
+        mangled_percent = 0
+
+    rating = 'pass'
+    if lost_percent > 1:
+        rating = 'acceptable'
+    if lost_percent > 7:
+        rating = 'fail'
+
+    return {
+        'round': round_config['round'],
+        'rate': round_config['rate'],
+        'packets': round_config['packet_count'],
+        'lost': lost_percent,
+        'mangled': mangled_percent,
+        'rating': rating,
+        'duration': diff
+    }
 
 # Handles UDP listening on a separate thread so that the TCP connection can be monitored by main thread for status updates
 # Param: udp_socket: The udp socket to be monitored
@@ -202,6 +219,7 @@ def UDP_Listener(udp_socket, expected_byte, statistics, loss, signal):
 
     packets_received = 0
     packets_mangled = 0
+    payload = bytearray([expected_byte] * 9216)
 
     while True:
         udp_socket.settimeout(1)
@@ -210,7 +228,7 @@ def UDP_Listener(udp_socket, expected_byte, statistics, loss, signal):
             # If packet falls within artificial loss window, drop (ignore) it
             if(random.random() > loss):
                 # If payload matches expected payload, just increment packet counter
-                if(udp_msg[0] == expected_byte):
+                if(udp_msg == payload):
                     packets_received = packets_received + 1
                 # Else, payload was mangled. Increment packet counter and magled packet counter
                 else:
@@ -221,6 +239,34 @@ def UDP_Listener(udp_socket, expected_byte, statistics, loss, signal):
                 statistics.append(packets_received)
                 statistics.append(packets_mangled)
                 return
+
+def UDP_Reply(udp_socket, expected_byte, statistics, loss, signal):
+
+    packets_received = 0
+    packets_mangled = 0
+    payload = bytearray([expected_byte] * 9216)
+
+    while True:
+        udp_socket.settimeout(1)
+        try:
+            udp_msg, udp_addr = udp_socket.recvfrom(9216)
+            # If packet falls within artificial loss window, drop (ignore) it
+            if(random.random() > loss):
+                # If payload matches expected payload, just increment packet counter
+                udp_socket.sendto(udp_msg, udp_addr)
+                if(udp_msg == payload):
+                    packets_received = packets_received + 1
+                # Else, payload was mangled. Increment packet counter and magled packet counter
+                else:
+                    packets_received = packets_received + 1
+                    packets_mangled = packets_mangled + 1
+
+        except socket.timeout:
+            if signal():
+                statistics.append(packets_received)
+                statistics.append(packets_mangled)
+                return
+
 
 if __name__ == "__main__":
     main()
